@@ -5,3 +5,5 @@ results/
 venv/
 contracts/__pycache__
 .vscode/
+commands.txt
+hardhat/node_modules/

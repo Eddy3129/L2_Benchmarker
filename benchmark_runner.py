@@ -1,52 +1,67 @@
-# benchmark_runner.py
+#!/usr/bin/env python3
 import os
 import json
 import time
 import pandas as pd
 from dotenv import load_dotenv
+from web3 import Web3 # For Web3.to_wei, Web3.to_checksum_address etc.
+
+# Assuming contract_loader.py is in lib/
 from lib.l2_utils import connect_to_l2, get_dynamic_gas_price
 from lib.transaction_utils import (
     execute_p2p_transfer, 
-    deploy_erc20_contract, 
+    deploy_simple_erc20,    
+    execute_simple_erc20_mint,
+    execute_approve_erc20, 
     execute_erc20_transfer,
-    deploy_nft_contract,      # Import new NFT functions
+    deploy_amm_pool_contract,
+    execute_pool_set_tokens,  
+    execute_add_liquidity,
+    execute_amm_swap,  
+    deploy_nft_contract,
     execute_nft_mint,
     execute_nft_transfer
 )
+# Import ABIs directly for contract interactions if needed for setup (e.g. decimals)
+from lib.transaction_utils import TOKEN_A_ABI, TOKEN_A_BYTECODE, TOKEN_B_ABI, TOKEN_B_BYTECODE
 
 # --- Configuration ---
 load_dotenv()
 
 # Script Configuration
 L2_CONFIG_NAME = "arbitrum_local_nitro"
-RUN_NAME = "full_suite_test_1" # Updated run name
-TRANSACTION_DELAY_SECONDS = 0.5
+RUN_NAME = "amm_full_test_v1" 
+TRANSACTION_DELAY_SECONDS = 0.5 # General delay
 
 # P2P ETH Transfer Config
 DO_P2P_ETH_TRANSFERS = True 
-NUMBER_OF_P2P_TRANSACTIONS = 2
-AMOUNT_TO_SEND_ETH = 0.0001
+AMOUNT_TO_SEND_ETH = 0.01
+NUMBER_OF_P2P_TRANSACTIONS = 1 # Keep low for combined test
 
-# ERC20 Token Config
-DO_ERC20_OPERATIONS = True 
-TOKEN_NAME = "MyBenchToken"
-TOKEN_SYMBOL = "MBT"
-TOKEN_INITIAL_SUPPLY = 1000000 
-NUMBER_OF_ERC20_TRANSFERS = 2 # Reduced for quicker combined test
-AMOUNT_TO_TRANSFER_TOKENS = 10 
+# AMM Test Scenario Config
+DO_AMM_OPERATIONS = True
+TOKEN_A_LOG_NAME = "TokenA" # For logging
+TOKEN_B_LOG_NAME = "TokenB" # For logging
+# Amounts for minting (in full units, script will convert based on 18 decimals)
+MINT_AMOUNT_TOKEN_A_UNITS = 10000 
+MINT_AMOUNT_TOKEN_B_UNITS = 10000
+# Amounts for adding liquidity (in full units)
+LIQUIDITY_TOKEN_A_UNITS = 1000
+LIQUIDITY_TOKEN_B_UNITS = 1000
+# Amounts for swap (TokenA for TokenB)
+SWAP_AMOUNT_TOKEN_A_IN_UNITS = 100
+MIN_AMOUNT_TOKEN_B_OUT_UNITS = 1 # Slippage protection: min B tokens expected
+NUMBER_OF_SWAPS = 2
 
-# NFT (ERC721) Config
-DO_NFT_OPERATIONS = True # Set to False to skip NFT operations
+# NFT (ERC721) Config (keep if you want to run these as well)
+DO_NFT_OPERATIONS = True 
 NFT_NAME = "MyBenchNFT"
 NFT_SYMBOL = "MBN"
-NUMBER_OF_NFT_MINTS = 2    # How many NFTs to mint
-# Note: Transfers will be attempted for each successfully minted NFT
+NUMBER_OF_NFT_MINTS = 1
+NFT_TRANSFER_RECIPIENT_ADDRESS = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B" 
 
 # Shared Config
-# This recipient will receive ETH, ERC20s, and NFTs
-GENERAL_RECIPIENT_ADDRESS = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf" 
-# You might want a different recipient for NFTs if the general one is also the sender/owner
-NFT_TRANSFER_RECIPIENT_ADDRESS = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B" # Example different address
+GENERAL_RECIPIENT_ADDRESS = "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf"
 
 # Load L2 configurations
 try:
@@ -67,14 +82,14 @@ if __name__ == "__main__":
     
     w3 = None
     try:
-        w3 = connect_to_l2(CURRENT_L2_CONFIG["rpc_url"], CURRENT_L2_CONFIG.get("chain_id")) # Use .get for optional chain_id
+        w3 = connect_to_l2(CURRENT_L2_CONFIG["rpc_url"], CURRENT_L2_CONFIG.get("chain_id"))
     except Exception as e:
         print(f"Failed to connect to L2: {e}"); exit()
 
     all_results = []
     transaction_counter = 0
-    sender_account_for_log = w3.eth.account.from_key(SENDER_PK)
-    print(f"\n--- Using Sender Account: {sender_account_for_log.address} ---")
+    sender_address = w3.eth.account.from_key(SENDER_PK).address
+    print(f"\n--- Using Sender Account: {sender_address} ---")
 
     # --- P2P ETH Transfers ---
     if DO_P2P_ETH_TRANSFERS:
@@ -89,39 +104,189 @@ if __name__ == "__main__":
                 if result['status'] == 'Success': print(f"✅ P2P ETH Tx {i+1} successful. Hash: {result.get('tx_hash')}")
                 else: print(f"⚠️ P2P ETH Tx {i+1} failed. Reason: {result.get('error_message', 'Unknown')}")
             except Exception as e:
-                print(f"Critical error P2P ETH tx {i+1}: {e}"); all_results.append({'run_identifier': run_id, 'action': 'p2p_eth_transfer', 'status': 'CriticalError', 'error_message': str(e)})
+                print(f"Critical error P2P ETH tx {i+1}: {e}"); all_results.append({'run_identifier': run_id, 'action': 'p2p_eth_transfer', 'sender_address': sender_address, 'status': 'CriticalError', 'error_message': str(e)})
             if i < NUMBER_OF_P2P_TRANSACTIONS - 1: time.sleep(TRANSACTION_DELAY_SECONDS)
 
-    # --- ERC20 Token Operations ---
-    deployed_erc20_address = None
-    if DO_ERC20_OPERATIONS:
-        print(f"\n--- Starting ERC20 Token Operations ---")
-        transaction_counter += 1; deploy_run_id = f"{RUN_NAME}_erc20_deploy_{transaction_counter}"
-        print(f"Attempting to deploy ERC20 token ('{TOKEN_NAME}')...")
+
+    # --- AMM Operations ---
+    deployed_token_a_address = None
+    deployed_token_b_address = None
+    deployed_amm_pool_address = None
+
+    if DO_AMM_OPERATIONS:
+        print(f"\n--- Starting AMM Operations ---")
+        token_decimals = 18 # Assuming standard 18 decimals for TokenA/B
+
+        # 1. Deploy TokenA
+        transaction_counter += 1; deploy_ta_id = f"{RUN_NAME}_deploy_tokenA_{transaction_counter}"
+        print(f"Attempting to deploy {TOKEN_A_LOG_NAME}...")
         try:
             gas_price_wei_deploy = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
-            deploy_result = deploy_erc20_contract(w3, SENDER_PK, gas_price_wei_deploy, TOKEN_NAME, TOKEN_SYMBOL, TOKEN_INITIAL_SUPPLY, run_identifier=deploy_run_id)
-            all_results.append(deploy_result)
-            if deploy_result['status'] == 'Success': deployed_erc20_address = deploy_result.get('contract_address'); print(f"✅ ERC20 Contract '{TOKEN_NAME}' deployed at: {deployed_erc20_address}")
-            else: print(f"⚠️ ERC20 Contract deployment failed. Reason: {deploy_result.get('error_message', 'Unknown')}")
+            result = deploy_simple_erc20(w3, SENDER_PK, gas_price_wei_deploy, TOKEN_A_ABI, TOKEN_A_BYTECODE, sender_address, TOKEN_A_LOG_NAME, run_identifier=deploy_ta_id)
+            all_results.append(result)
+            if result['status'] == 'Success': deployed_token_a_address = result.get('contract_address'); print(f"✅ {TOKEN_A_LOG_NAME} deployed: {deployed_token_a_address}")
+            else: print(f"⚠️ {TOKEN_A_LOG_NAME} deployment failed: {result.get('error_message', 'Unknown')}")
         except Exception as e:
-            print(f"Critical error ERC20 deployment: {e}"); all_results.append({'run_identifier': deploy_run_id, 'action': 'deploy_erc20', 'status': 'CriticalError', 'error_message': str(e)})
+            print(f"Critical error deploying {TOKEN_A_LOG_NAME}: {e}"); all_results.append({'run_identifier': deploy_ta_id, 'action': f'deploy_{TOKEN_A_LOG_NAME.lower()}', 'status': 'CriticalError', 'error_message': str(e)})
+        time.sleep(TRANSACTION_DELAY_SECONDS)
 
-        if deployed_erc20_address:
-            print(f"\n--- Starting ERC20 Token Transfers ({NUMBER_OF_ERC20_TRANSFERS} transactions) ---")
-            for i in range(NUMBER_OF_ERC20_TRANSFERS):
-                transaction_counter += 1; transfer_run_id = f"{RUN_NAME}_erc20_transfer_tx_{transaction_counter}"
-                print(f"Attempting ERC20 Token Tx {i+1}/{NUMBER_OF_ERC20_TRANSFERS}...")
+        # 2. Deploy TokenB
+        if deployed_token_a_address: # Proceed only if TokenA deployed
+            transaction_counter += 1; deploy_tb_id = f"{RUN_NAME}_deploy_tokenB_{transaction_counter}"
+            print(f"Attempting to deploy {TOKEN_B_LOG_NAME}...")
+            try:
+                gas_price_wei_deploy = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                result = deploy_simple_erc20(w3, SENDER_PK, gas_price_wei_deploy, TOKEN_B_ABI, TOKEN_B_BYTECODE, sender_address, TOKEN_B_LOG_NAME, run_identifier=deploy_tb_id)
+                all_results.append(result)
+                if result['status'] == 'Success': deployed_token_b_address = result.get('contract_address'); print(f"✅ {TOKEN_B_LOG_NAME} deployed: {deployed_token_b_address}")
+                else: print(f"⚠️ {TOKEN_B_LOG_NAME} deployment failed: {result.get('error_message', 'Unknown')}")
+            except Exception as e:
+                print(f"Critical error deploying {TOKEN_B_LOG_NAME}: {e}"); all_results.append({'run_identifier': deploy_tb_id, 'action': f'deploy_{TOKEN_B_LOG_NAME.lower()}', 'status': 'CriticalError', 'error_message': str(e)})
+            time.sleep(TRANSACTION_DELAY_SECONDS)
+
+        # 3. Deploy AMM Pool (BasicPool)
+        if deployed_token_a_address and deployed_token_b_address:
+            transaction_counter += 1; deploy_pool_id = f"{RUN_NAME}_deploy_amm_pool_{transaction_counter}"
+            print(f"Attempting to deploy AMM Pool...")
+            try:
+                gas_price_wei_deploy = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                # BasicPool.sol constructor takes no arguments
+                result = deploy_amm_pool_contract(w3, SENDER_PK, gas_price_wei_deploy, run_identifier=deploy_pool_id)
+                all_results.append(result)
+                if result['status'] == 'Success': deployed_amm_pool_address = result.get('contract_address'); print(f"✅ AMM Pool deployed: {deployed_amm_pool_address}")
+                else: print(f"⚠️ AMM Pool deployment failed: {result.get('error_message', 'Unknown')}")
+            except Exception as e:
+                print(f"Critical error deploying AMM Pool: {e}"); all_results.append({'run_identifier': deploy_pool_id, 'action': 'deploy_amm_pool', 'status': 'CriticalError', 'error_message': str(e)})
+            time.sleep(TRANSACTION_DELAY_SECONDS)
+
+            # 3b. Set Tokens for AMM Pool (if pool constructor was empty and requires separate setting)
+            # The BasicPool.sol from simpleCPMM requires setTokenA and setTokenB to be called by owner.
+            if deployed_amm_pool_address:
+                transaction_counter += 1; set_tokens_id = f"{RUN_NAME}_pool_set_tokens_{transaction_counter}"
+                print(f"Attempting to set tokens for AMM Pool {deployed_amm_pool_address}...")
+                try:
+                    gas_price_wei_set = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                    result = execute_pool_set_tokens(w3, SENDER_PK, gas_price_wei_set, deployed_amm_pool_address, deployed_token_a_address, deployed_token_b_address, run_identifier=set_tokens_id)
+                    all_results.append(result)
+                    if result['status'] == 'Success': print(f"✅ Tokens set for AMM Pool.")
+                    else: print(f"⚠️ Failed to set tokens for AMM Pool: {result.get('error_message', 'Unknown')}")
+                except Exception as e:
+                    print(f"Critical error setting tokens for AMM Pool: {e}"); all_results.append({'run_identifier': set_tokens_id, 'action': 'pool_set_tokens', 'status': 'CriticalError', 'error_message': str(e)})
+                time.sleep(TRANSACTION_DELAY_SECONDS)
+
+        # 4. Mint TokenA and TokenB to Sender
+        if deployed_token_a_address and deployed_token_b_address:
+            print(f"\n--- Minting initial tokens to sender {sender_address} ---")
+            amount_a_to_mint_wei = MINT_AMOUNT_TOKEN_A_UNITS * (10**token_decimals)
+            amount_b_to_mint_wei = MINT_AMOUNT_TOKEN_B_UNITS * (10**token_decimals)
+
+            for token_addr, token_abi, amount_wei, log_name in [
+                (deployed_token_a_address, TOKEN_A_ABI, amount_a_to_mint_wei, TOKEN_A_LOG_NAME),
+                (deployed_token_b_address, TOKEN_B_ABI, amount_b_to_mint_wei, TOKEN_B_LOG_NAME)
+            ]:
+                transaction_counter += 1; mint_id = f"{RUN_NAME}_mint_{log_name.lower()}_{transaction_counter}"
+                print(f"Minting {MINT_AMOUNT_TOKEN_A_UNITS if log_name == TOKEN_A_LOG_NAME else MINT_AMOUNT_TOKEN_B_UNITS} {log_name} to {sender_address}...")
+                try:
+                    gas_price_wei_mint = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                    result = execute_simple_erc20_mint(w3, SENDER_PK, gas_price_wei_mint, token_addr, token_abi, sender_address, amount_wei, run_identifier=mint_id)
+                    all_results.append(result)
+                    if result['status'] == 'Success': print(f"✅ {log_name} minted.")
+                    else: print(f"⚠️ {log_name} minting failed: {result.get('error_message', 'Unknown')}")
+                except Exception as e:
+                    print(f"Critical error minting {log_name}: {e}"); all_results.append({'run_identifier': mint_id, 'action': f'mint_{log_name.lower()}', 'status': 'CriticalError', 'error_message': str(e)})
+                time.sleep(TRANSACTION_DELAY_SECONDS)
+
+        # 4.5. ERC20 Transfers (after minting, before approval)
+        if deployed_token_a_address and deployed_token_b_address:
+            print(f"\n--- Starting ERC20 Transfers ---")
+            # Transfer some TokenA to the general recipient
+            transfer_amount_units = 100  # Amount to transfer
+            transfer_amount_wei = transfer_amount_units * (10**token_decimals)
+            
+            for token_addr, token_abi, log_name in [
+                (deployed_token_a_address, TOKEN_A_ABI, TOKEN_A_LOG_NAME),
+                (deployed_token_b_address, TOKEN_B_ABI, TOKEN_B_LOG_NAME)
+            ]:
+                transaction_counter += 1
+                transfer_id = f"{RUN_NAME}_transfer_{log_name.lower()}_{transaction_counter}"
+                print(f"Transferring {transfer_amount_units} {log_name} to {GENERAL_RECIPIENT_ADDRESS}...")
                 try:
                     gas_price_wei_transfer = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
-                    transfer_result = execute_erc20_transfer(w3, SENDER_PK, deployed_erc20_address, GENERAL_RECIPIENT_ADDRESS, AMOUNT_TO_TRANSFER_TOKENS, gas_price_wei_transfer, run_identifier=transfer_run_id)
-                    all_results.append(transfer_result)
-                    if transfer_result['status'] == 'Success': print(f"✅ ERC20 Tx {i+1} successful. Hash: {transfer_result.get('tx_hash')}")
-                    else: print(f"⚠️ ERC20 Tx {i+1} failed. Reason: {transfer_result.get('error_message', 'Unknown')}")
+                    result = execute_erc20_transfer(w3, SENDER_PK, gas_price_wei_transfer, token_addr, token_abi, GENERAL_RECIPIENT_ADDRESS, transfer_amount_wei, run_identifier=transfer_id)
+                    all_results.append(result)
+                    if result['status'] == 'Success':
+                        print(f"✅ {log_name} transfer successful. Hash: {result.get('tx_hash')}")
+                    else:
+                        print(f"⚠️ {log_name} transfer failed: {result.get('error_message', 'Unknown')}")
                 except Exception as e:
-                    print(f"Critical error ERC20 tx {i+1}: {e}"); all_results.append({'run_identifier': transfer_run_id, 'action': 'erc20_transfer', 'status': 'CriticalError', 'error_message': str(e)})
-                if i < NUMBER_OF_ERC20_TRANSFERS - 1: time.sleep(TRANSACTION_DELAY_SECONDS)
-        else: print("Skipping ERC20 transfers: contract deployment failed or skipped.")
+                    print(f"Critical error transferring {log_name}: {e}")
+                    all_results.append({'run_identifier': transfer_id, 'action': f'transfer_{log_name.lower()}', 'status': 'CriticalError', 'error_message': str(e)})
+                time.sleep(TRANSACTION_DELAY_SECONDS)
+        
+        # 5. Approve AMM Pool to spend TokenA and TokenB
+        if deployed_token_a_address and deployed_token_b_address and deployed_amm_pool_address:
+            print(f"\n--- Approving AMM Pool {deployed_amm_pool_address} to spend tokens ---")
+            # Approve a large amount (max uint256)
+            approve_amount_wei = w3.to_int(hexstr="0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+
+            for token_addr, token_abi, log_name in [
+                (deployed_token_a_address, TOKEN_A_ABI, TOKEN_A_LOG_NAME),
+                (deployed_token_b_address, TOKEN_B_ABI, TOKEN_B_LOG_NAME)
+            ]:
+                transaction_counter += 1; approve_id = f"{RUN_NAME}_approve_{log_name.lower()}_for_pool_{transaction_counter}"
+                print(f"Approving AMM Pool for {log_name}...")
+                try:
+                    gas_price_wei_approve = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                    result = execute_approve_erc20(w3, SENDER_PK, gas_price_wei_approve, token_addr, token_abi, deployed_amm_pool_address, approve_amount_wei, run_identifier=approve_id)
+                    all_results.append(result)
+                    if result['status'] == 'Success': print(f"✅ AMM Pool approved for {log_name}.")
+                    else: print(f"⚠️ AMM Pool approval for {log_name} failed: {result.get('error_message', 'Unknown')}")
+                except Exception as e:
+                    print(f"Critical error approving AMM Pool for {log_name}: {e}"); all_results.append({'run_identifier': approve_id, 'action': f'approve_{log_name.lower()}_for_pool', 'status': 'CriticalError', 'error_message': str(e)})
+                time.sleep(TRANSACTION_DELAY_SECONDS)
+
+        # 6. Add Liquidity to AMM Pool
+        if deployed_amm_pool_address and deployed_token_a_address and deployed_token_b_address:
+            transaction_counter += 1; add_liq_id = f"{RUN_NAME}_add_liquidity_{transaction_counter}"
+            print(f"Attempting to add liquidity ({LIQUIDITY_TOKEN_A_UNITS} {TOKEN_A_LOG_NAME}, {LIQUIDITY_TOKEN_B_UNITS} {TOKEN_B_LOG_NAME})...")
+            try:
+                amount_a_add_wei = LIQUIDITY_TOKEN_A_UNITS * (10**token_decimals)
+                amount_b_add_wei = LIQUIDITY_TOKEN_B_UNITS * (10**token_decimals)
+                gas_price_wei_add_liq = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                result = execute_add_liquidity(w3, SENDER_PK, gas_price_wei_add_liq, deployed_amm_pool_address, amount_a_add_wei, amount_b_add_wei, run_identifier=add_liq_id)
+                all_results.append(result)
+                if result['status'] == 'Success': print(f"✅ Liquidity added to AMM Pool.")
+                else: print(f"⚠️ Failed to add liquidity: {result.get('error_message', 'Unknown')}")
+            except Exception as e:
+                print(f"Critical error adding liquidity: {e}"); all_results.append({'run_identifier': add_liq_id, 'action': 'amm_add_liquidity', 'status': 'CriticalError', 'error_message': str(e)})
+            time.sleep(TRANSACTION_DELAY_SECONDS)
+
+        # 7. Perform Swaps (TokenA for TokenB)
+        if deployed_amm_pool_address and deployed_token_a_address and deployed_token_b_address:
+            print(f"\n--- Starting AMM Swaps ({NUMBER_OF_SWAPS} swaps of {TOKEN_A_LOG_NAME} for {TOKEN_B_LOG_NAME}) ---")
+            for i in range(NUMBER_OF_SWAPS):
+                transaction_counter += 1; swap_id = f"{RUN_NAME}_amm_swap_A_for_B_tx_{transaction_counter}"
+                print(f"Attempting AMM Swap {i+1}/{NUMBER_OF_SWAPS}...")
+                try:
+                    amount_a_in_wei = SWAP_AMOUNT_TOKEN_A_IN_UNITS * (10**token_decimals)
+                    min_amount_b_out_wei = MIN_AMOUNT_TOKEN_B_OUT_UNITS * (10**token_decimals)
+                    gas_price_wei_swap = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
+                    
+                    result = execute_amm_swap(
+                        w3, SENDER_PK, gas_price_wei_swap, deployed_amm_pool_address,
+                        deployed_token_a_address, amount_a_in_wei,
+                        deployed_token_b_address, min_amount_b_out_wei,
+                        sender_address, # Swap output goes back to sender
+                        run_identifier=swap_id
+                    )
+                    all_results.append(result)
+                    if result['status'] == 'Success': print(f"✅ AMM Swap {i+1} successful. Hash: {result.get('tx_hash')}")
+                    else: print(f"⚠️ AMM Swap {i+1} failed: {result.get('error_message', 'Unknown')}")
+                except Exception as e:
+                    print(f"Critical error during AMM Swap {i+1}: {e}"); all_results.append({'run_identifier': swap_id, 'action': 'amm_swap_A_for_B', 'status': 'CriticalError', 'error_message': str(e)})
+                if i < NUMBER_OF_SWAPS - 1: time.sleep(TRANSACTION_DELAY_SECONDS)
+        else:
+            print("Skipping AMM setup (token deployment, pool deployment, liquidity, swaps) due to earlier failures or config.")
 
     # --- NFT (ERC721) Operations ---
     deployed_nft_address = None
@@ -146,10 +311,10 @@ if __name__ == "__main__":
             for i in range(NUMBER_OF_NFT_MINTS):
                 transaction_counter += 1; mint_run_id = f"{RUN_NAME}_nft_mint_tx_{transaction_counter}"
                 # Minting to the sender/owner themselves first
-                print(f"Attempting NFT Mint {i+1}/{NUMBER_OF_NFT_MINTS} to {sender_account_for_log.address}...")
+                print(f"Attempting NFT Mint {i+1}/{NUMBER_OF_NFT_MINTS} to {sender_address}...")
                 try:
                     gas_price_wei_mint = get_dynamic_gas_price(w3, CURRENT_L2_CONFIG.get("gas_price_strategy", "fetch"), CURRENT_L2_CONFIG.get("fixed_gas_price_gwei", 0.1))
-                    mint_result, minted_id = execute_nft_mint(w3, SENDER_PK, deployed_nft_address, sender_account_for_log.address, gas_price_wei_mint, run_identifier=mint_run_id)
+                    mint_result, minted_id = execute_nft_mint(w3, SENDER_PK, deployed_nft_address, sender_address, gas_price_wei_mint, run_identifier=mint_run_id)
                     all_results.append(mint_result)
                     if mint_result['status'] == 'Success' and minted_id is not None:
                         minted_token_ids.append(minted_id) # Store for transfer
@@ -179,7 +344,6 @@ if __name__ == "__main__":
              print("Skipping NFT transfers: No NFTs were successfully minted or minting was skipped.")
         else:
             print("Skipping NFT transfers: NFT contract deployment failed or skipped.")
-
 
     # --- Final Results Processing ---
     print("\n--- Benchmark Run Complete ---")
