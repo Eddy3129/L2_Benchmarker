@@ -1,0 +1,9 @@
+{
+    "arbitrum_local_nitro": {
+      "rpc_url": "http://localhost:8547",
+      "chain_id": 412346,
+      "explorer_url_template": null, 
+      "gas_price_strategy": "fetch", 
+      "fixed_gas_price_gwei": 0.1 
+    }
+  }

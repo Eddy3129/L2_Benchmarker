@@ -1,0 +1,7 @@
+.env
+nitro-devnode/
+lib/__pycache__/
+results/
+venv/
+contracts/__pycache__
+.vscode/
