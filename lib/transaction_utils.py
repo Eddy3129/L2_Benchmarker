@@ -22,6 +22,23 @@ except Exception as e: # Catch a broader exception if contract_loader itself fai
     print(f"Warning: NFT details for MyNFT.sol not loaded via contract_loader. NFT tests might fail. Error: {e}")
 
 
+# --- Helper function to extract L1 fee data ---
+def extract_l1_fee_data(w3_instance, tx_receipt):
+    """Extract L1 fee components from transaction receipt"""
+    l1_fee_component_wei = tx_receipt.get('l1Fee')
+    l1_gas_used_on_l1 = tx_receipt.get('l1GasUsed')
+    l1_gas_price_on_l1 = tx_receipt.get('l1GasPrice')
+    l1_fee_scalar = tx_receipt.get('l1FeeScalar')
+    
+    return {
+        'l1_fee_wei': l1_fee_component_wei if l1_fee_component_wei is not None else None,
+        'l1_fee_eth': w3_instance.from_wei(l1_fee_component_wei, 'ether') if l1_fee_component_wei is not None else None,
+        'l1_gas_used': l1_gas_used_on_l1 if l1_gas_used_on_l1 is not None else None,
+        'l1_gas_price_gwei': w3_instance.from_wei(l1_gas_price_on_l1, 'gwei') if l1_gas_price_on_l1 is not None else None,
+        'l1_fee_scalar': l1_fee_scalar if l1_fee_scalar is not None else None
+    }
+
+
 # --- Existing P2P ETH Transfer Function ---
 def execute_p2p_transfer(w3_instance, sender_pk, recipient_address, amount_eth, gas_price_wei, run_identifier="N/A"):
     sender_address_val = 'N/A'; nonce_val = 'N/A'
@@ -35,7 +52,13 @@ def execute_p2p_transfer(w3_instance, sender_pk, recipient_address, amount_eth, 
         start_time = time.time(); tx_receipt = w3_instance.eth.wait_for_transaction_receipt(tx_hash, timeout=180); end_time = time.time()
         confirmation_time = end_time - start_time; effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'p2p_eth_transfer', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success' if tx_receipt.status == 1 else 'Failed','block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'p2p_eth_transfer', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success' if tx_receipt.status == 1 else 'Failed','block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'p2p_eth_transfer','sender_address': sender_address_val, 'nonce': nonce_val,'status': 'Error', 'error_message': str(e)}
 
@@ -64,7 +87,13 @@ def deploy_simple_erc20(w3_instance, sender_pk, gas_price_wei,
         print(f"{token_log_name} Contract deployed at: {contract_address}")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': f'deploy_{token_log_name.lower()}', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': f'deploy_{token_log_name.lower()}', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': f'deploy_{token_log_name.lower()}', 'sender_address': sender_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -95,7 +124,13 @@ def execute_simple_erc20_mint(w3_instance, sender_pk, gas_price_wei,
         if tx_receipt.status != 1: raise Exception("Token minting failed.")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'erc20_mint', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': token_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'erc20_mint', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': token_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'erc20_mint','sender_address': sender_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -126,7 +161,13 @@ def execute_approve_erc20(w3_instance, owner_pk, gas_price_wei,
         if tx_receipt.status != 1: raise Exception("ERC20 approve failed.")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'erc20_approve', 'sender_address': owner_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': token_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'erc20_approve', 'sender_address': owner_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': token_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'erc20_approve','sender_address': owner_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -152,7 +193,13 @@ def deploy_amm_pool_contract(w3_instance, sender_pk, gas_price_wei,
         print(f"AMM Pool Contract deployed at: {contract_address}")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'deploy_amm_pool', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'deploy_amm_pool', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'deploy_amm_pool','sender_address': sender_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -216,7 +263,13 @@ def execute_add_liquidity(w3_instance, sender_pk, gas_price_wei,
         if tx_receipt.status != 1: raise Exception("Add liquidity failed.")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'amm_add_liquidity', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': pool_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'amm_add_liquidity', 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': pool_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'amm_add_liquidity','sender_address': sender_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -259,7 +312,13 @@ def execute_amm_swap(w3_instance, sender_pk, gas_price_wei,
         if tx_receipt.status != 1: raise Exception(f"AMM swap ({action_name}) failed.")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': action_name, 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': pool_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': action_name, 'sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': pool_contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': action_name,'sender_address': sender_address_val, 'nonce': nonce_val, 'status': 'Error', 'error_message': str(e)}
 
@@ -281,7 +340,13 @@ def deploy_nft_contract(w3_instance, sender_pk, gas_price_wei, nft_name, nft_sym
         contract_address = tx_receipt.contractAddress; print(f"NFT Contract '{nft_name}' deployed successfully at: {contract_address}")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'deploy_nft','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'deploy_nft','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': contract_address,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'deploy_nft','sender_address': sender_address_val, 'nonce': nonce_val,'status': 'Error', 'error_message': str(e)}
 
@@ -308,7 +373,13 @@ def execute_nft_mint(w3_instance, sender_pk, nft_contract_address, mint_to_addre
         print(f"NFT minted. Tx Status: Success. Token ID (from event processing): {minted_token_id if minted_token_id is not None else 'Not reliably found'}")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'nft_mint','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': nft_contract_address, 'token_id_minted': minted_token_id,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}, minted_token_id
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'nft_mint','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': nft_contract_address, 'token_id_minted': minted_token_id,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result, minted_token_id
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'nft_mint','sender_address': sender_address_val, 'nonce': nonce_val,'status': 'Error', 'error_message': str(e)}, None
 
@@ -329,7 +400,12 @@ def execute_nft_transfer(w3_instance, sender_pk, nft_contract_address, transfer_
         print(f"NFT ID {token_id} transferred successfully.")
         effective_gas_price = tx_receipt.get('effectiveGasPrice', gas_price_wei)
         fee_paid_wei = tx_receipt.gasUsed * effective_gas_price; fee_paid_eth = w3_instance.from_wei(fee_paid_wei, 'ether')
-        return {'run_identifier': run_identifier, 'action': 'nft_transfer','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': nft_contract_address, 'token_id_transferred': token_id,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        
+        # Extract L1 fee data
+        l1_fee_data = extract_l1_fee_data(w3_instance, tx_receipt)
+        
+        result = {'run_identifier': run_identifier, 'action': 'nft_transfer','sender_address': sender_address_val, 'nonce': nonce_val, 'tx_hash': tx_hash.hex(),'status': 'Success', 'contract_address': nft_contract_address, 'token_id_transferred': token_id,'block_number': tx_receipt.blockNumber, 'gas_used': tx_receipt.gasUsed,'configured_gas_price_gwei': round(w3_instance.from_wei(gas_price_wei, 'gwei'), 4),'effective_gas_price_gwei': round(w3_instance.from_wei(effective_gas_price, 'gwei'), 4),'fee_paid_eth': fee_paid_eth, 'confirmation_time_sec': round(confirmation_time, 6)}
+        result.update(l1_fee_data)
+        return result
     except Exception as e:
         return {'run_identifier': run_identifier, 'action': 'nft_transfer','sender_address': sender_address_val, 'nonce': nonce_val, 'token_id_transferred': token_id,'status': 'Error', 'error_message': str(e)}
-

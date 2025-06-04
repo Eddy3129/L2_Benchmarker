@@ -20,19 +20,18 @@ from lib.transaction_utils import (
     execute_nft_mint,
     execute_nft_transfer
 )
-# Removed problematic import: from lib.contract_loader import TOKEN_A_ABI, TOKEN_B_ABI 
 
 # --- Configuration ---
 load_dotenv()
 
 # Script Configuration
 L2_CONFIG_NAME = "arbitrum_local_nitro"
-RUN_NAME = "full_suite_plus_sustained_v1" 
+RUN_NAME = "full_suite_plus_sustained_v2_extended" 
 TRANSACTION_DELAY_SECONDS = 0.2 # General delay between different phases/major ops
 
-# P2P ETH Transfer Config (for individual tests)
+# P2P ETH Transfer Config (for individual tests) - INCREASED
 DO_P2P_ETH_TRANSFERS = True 
-NUMBER_OF_P2P_TRANSACTIONS = 1 
+NUMBER_OF_P2P_TRANSACTIONS = 50  # Increased from 1 to 50
 AMOUNT_TO_SEND_ETH_P2P = 0.00001 # Renamed to avoid conflict
 
 # AMM Test Scenario Config
@@ -42,17 +41,17 @@ MINT_AMOUNT_TOKEN_UNITS = 10000
 LIQUIDITY_TOKEN_A_UNITS = 1000; LIQUIDITY_TOKEN_B_UNITS = 1000
 SWAP_AMOUNT_TOKEN_A_IN_UNITS = 100
 MIN_AMOUNT_TOKEN_B_OUT_UNITS = 1 
-NUMBER_OF_SWAPS = 1
+NUMBER_OF_SWAPS = 20  # Increased from 1 to 20
 
-# NFT (ERC721) Config
+# NFT (ERC721) Config - INCREASED
 DO_NFT_OPERATIONS = True 
 NFT_NAME = "MyBenchNFT"; NFT_SYMBOL = "MBN"
-NUMBER_OF_NFT_MINTS = 1
+NUMBER_OF_NFT_MINTS = 20  # Increased from 1 to 20
 NFT_TRANSFER_RECIPIENT_ADDRESS = "0xAb5801a7D398351b8bE11C439e05C5B3259aeC9B" 
 
-# TS-005: Sustained Low-Intensity Load Test Config
+# TS-005: Sustained Low-Intensity Load Test Config - INCREASED
 DO_SUSTAINED_LOAD_TEST = True
-SUSTAINED_LOAD_DURATION_SECONDS = 20  # How long to run the test (e.g., 60 seconds)
+SUSTAINED_LOAD_DURATION_SECONDS = 120  # Increased from 20 to 120 seconds
 SUSTAINED_LOAD_TPS_TARGET = 2       # Target transactions per second
 AMOUNT_TO_SEND_ETH_SUSTAINED = 0.000001 # Small amount for sustained test
 # Calculated delay for sustained load:
@@ -362,20 +361,67 @@ if __name__ == "__main__":
     # --- Final Results Processing ---
     print("\n--- Benchmark Run Complete ---")
     if all_results:
-        results_df = pd.DataFrame(all_results)
+        print(f"\n--- Processing {len(all_results)} transaction results ---")
+        
+        # Updated desired_columns to include L1 fee data
         desired_columns = [
-            'run_identifier', 'action', 'sender_address', 'nonce', 'tx_hash', 'status', 
-            'contract_address', 'token_id_minted', 'token_id_transferred', 
-            'block_number', 'gas_used', 'configured_gas_price_gwei', 
-            'effective_gas_price_gwei', 'fee_paid_eth', 'confirmation_time_sec', 'error_message'
+            'run_identifier', 'action', 'status', 'sender_address', 'nonce', 'tx_hash',
+            'block_number', 'gas_used', 'configured_gas_price_gwei', 'effective_gas_price_gwei',
+            'fee_paid_eth', 'confirmation_time_sec', 'contract_address', 'token_id_minted', 'token_id_transferred',
+            # New L1 fee columns
+            'l1_fee_wei', 'l1_fee_eth', 'l1_gas_used', 'l1_gas_price_gwei', 'l1_fee_scalar'
         ]
-        existing_columns = [col for col in desired_columns if col in results_df.columns]
-        results_df = results_df.reindex(columns=existing_columns)
-
-        print(results_df.to_string())
-        if not os.path.exists('results'): os.makedirs('results')
-        output_filename = f"results/{RUN_NAME}_{L2_CONFIG_NAME}.csv"
-        results_df.to_csv(output_filename, index=False)
-        print(f"\n📊 Results saved to {output_filename}")
+        
+        df = pd.DataFrame(all_results)
+        
+        # Ensure all desired columns exist (fill missing with None)
+        for col in desired_columns:
+            if col not in df.columns:
+                df[col] = None
+        
+        df_ordered = df[desired_columns]
+        
+        # Create results directory if it doesn't exist
+        os.makedirs('results', exist_ok=True)
+        
+        # Save to CSV with timestamp
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        csv_filename = f"results/benchmark_results_{RUN_NAME}_{timestamp}.csv"
+        df_ordered.to_csv(csv_filename, index=False)
+        print(f"✅ Results saved to: {csv_filename}")
+        
+        # Display summary statistics
+        print(f"\n--- Summary Statistics ---")
+        print(f"Total transactions: {len(df_ordered)}")
+        successful_txs = df_ordered[df_ordered['status'] == 'Success']
+        print(f"Successful transactions: {len(successful_txs)}")
+        print(f"Failed transactions: {len(df_ordered) - len(successful_txs)}")
+        
+        if len(successful_txs) > 0:
+            print(f"\n--- Gas Usage Statistics (Successful Transactions) ---")
+            print(f"Average gas used: {successful_txs['gas_used'].mean():.0f}")
+            print(f"Median gas used: {successful_txs['gas_used'].median():.0f}")
+            print(f"Average confirmation time: {successful_txs['confirmation_time_sec'].mean():.4f} seconds")
+            print(f"Median confirmation time: {successful_txs['confirmation_time_sec'].median():.4f} seconds")
+            
+            # L1 fee statistics (if available)
+            l1_fee_txs = successful_txs[successful_txs['l1_fee_eth'].notna()]
+            if len(l1_fee_txs) > 0:
+                print(f"\n--- L1 Fee Statistics (Transactions with L1 data) ---")
+                print(f"Transactions with L1 fee data: {len(l1_fee_txs)}")
+                print(f"Average L1 fee: {l1_fee_txs['l1_fee_eth'].mean():.8f} ETH")
+                print(f"Median L1 fee: {l1_fee_txs['l1_fee_eth'].median():.8f} ETH")
+                print(f"Total L1 fees paid: {l1_fee_txs['l1_fee_eth'].sum():.8f} ETH")
+            else:
+                print(f"\n--- L1 Fee Statistics ---")
+                print(f"No L1 fee data found in transaction receipts.")
+                print(f"This might be normal for your L2 implementation or the field names might be different.")
+        
+        # Display first few rows for verification
+        print(f"\n--- Sample Results (First 5 rows) ---")
+        print(df_ordered.head().to_string(index=False))
+        
     else:
-        print("No results collected.")
+        print("⚠️ No transaction results to process.")
+    
+    print(f"\n🎉 Benchmark run '{RUN_NAME}' completed!")
