@@ -4,6 +4,10 @@ lib/__pycache__/
 results/
 venv/
 contracts/__pycache__
+supersim_folder/
 .vscode/
 commands.txt
 hardhat/node_modules/
+zkevm-node/
+kurtosis-cdk/
+anvil-zksync/

@@ -5,5 +5,19 @@
       "explorer_url_template": null, 
       "gas_price_strategy": "fetch", 
       "fixed_gas_price_gwei": 0.1 
+    },
+    "optimism_local_devnet": {
+      "rpc_url": "http://localhost:9545",
+      "chain_id": 901,
+      "explorer_url_template": null, 
+      "gas_price_strategy": "fetch", 
+      "fixed_gas_price_gwei": 0.001
+    },
+    "anvil-zksync": {
+      "rpc_url": "http://localhost:8011",
+      "chain_id": 260,
+      "explorer_url_template": null, 
+      "gas_price_strategy": "fetch", 
+      "fixed_gas_price_gwei": 0.1
     }
   }

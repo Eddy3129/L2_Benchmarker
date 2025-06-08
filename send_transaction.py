@@ -4,8 +4,8 @@ import time
 import pandas as pd # For collecting results
 
 # --- Configuration ---
-L2_RPC_URL = "http://localhost:8547"
-SENDER_PRIVATE_KEY = "0xb6b15c8cb491557369f3c7d2c287b053eb229daa9c22138887752191c9520659"  # <--- PASTE YOUR ACTUAL PRIVATE KEY HERE
+L2_RPC_URL = "http://localhost:8011"
+SENDER_PRIVATE_KEY = "0x3d3cbc973389cb26f657686445bcc75662b415b656078503592ac8c1abb8810e"  # <--- PASTE YOUR ACTUAL PRIVATE KEY HERE
 # If you generated a recipient address:
 # RECIPIENT_ADDRESS = "0xTHE_GENERATED_RECIPIENT_ADDRESS_HERE"
 # Or use another known dev address:
@@ -35,12 +35,12 @@ def execute_p2p_transfer(w3_instance, sender_pk, recipient_address, amount_eth, 
         # Gas price (can be adjusted based on L2)
         # For Arbitrum Nitro devnode, 0.1 Gwei is often the base fee.
         # For other L2s or if dynamic, you might use w3_instance.eth.gas_price
-        gas_price = w3_instance.to_wei('0.1', 'gwei')
+        gas_price = w3_instance.to_wei('1', 'gwei')
 
         tx_details = {
             'to': checksum_recipient_address,
             'value': w3_instance.to_wei(amount_eth, 'ether'),
-            'gas': 21000,  # Standard gas limit for ETH transfer
+            'gas': 1000000,  # Standard gas limit for ETH transfer
             'gasPrice': gas_price,
             'nonce': nonce,
             'chainId': w3_instance.eth.chain_id

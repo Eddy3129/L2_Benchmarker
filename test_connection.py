@@ -2,7 +2,7 @@ from web3 import Web3
 from web3.middleware import ExtraDataToPOAMiddleware # Important for many dev nodes
 
 # Replace with the actual RPC URL if different
-L2_RPC_URL = "http://localhost:8547"
+L2_RPC_URL = "http://localhost:8011"
 
 def check_l2_connection(rpc_url):
     try:
@@ -30,7 +30,7 @@ def check_l2_connection(rpc_url):
 
         # 6. Get a pre-funded account balance (Arbitrum dev nodes usually have this one)
         # This is one of the pre-funded accounts from the nitro-devnode setup
-        pre_funded_address = "0x3f1Eae7D46d88F08fc2F8ed27FCb2AB183EB2d0E"
+        pre_funded_address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
         # Ensure the address is checksummed for web3.py
         checksum_address = Web3.to_checksum_address(pre_funded_address)
         balance_wei = w3.eth.get_balance(checksum_address)

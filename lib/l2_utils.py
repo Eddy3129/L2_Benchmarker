@@ -1,6 +1,10 @@
 # lib/l2_utils.py
+from zksync2.module.module_builder import ZkSyncBuilder
+from zksync2.signer.eth_signer import PrivateKeyEthSigner
+from zksync2.transaction.transaction_builders import TxFunctionCall
+from eth_account import Account
+from eth_typing import HexStr
 from web3 import Web3
-from web3.middleware import ExtraDataToPOAMiddleware
 
 def connect_to_l2(rpc_url, expected_chain_id=None):
     """Connects to an L2 node and returns the web3 instance."""
@@ -21,6 +25,16 @@ def connect_to_l2(rpc_url, expected_chain_id=None):
             f"Chain ID mismatch! Expected {expected_chain_id}, but connected to {actual_chain_id}."
         )
     return w3
+
+def connect_to_zksync_l2(rpc_url, chain_id=None):
+    """Connect to ZKsync L2 using ZKsync2 SDK"""
+    try:
+        zk_web3 = ZkSyncBuilder.build(rpc_url)
+        print(f"✅ Connected to ZKsync L2: {rpc_url}")
+        return zk_web3
+    except Exception as e:
+        print(f"❌ Failed to connect to ZKsync L2: {e}")
+        raise
 
 def get_dynamic_gas_price(w3, strategy="fetch", fixed_gwei=0.1):
     """Gets gas price based on strategy."""
